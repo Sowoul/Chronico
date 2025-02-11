@@ -1,12 +1,12 @@
 import os
-from PyQt5.QtCore import QUrl, QSize, QThread, pyqtSignal, Qt, QTimer
+from PyQt5.QtCore import QUrl, QSize, QThread, pyqtSignal, Qt, QTimer, QPoint
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget, QLineEdit, QPushButton,
     QHBoxLayout, QTabWidget, QToolButton, QTabBar, QShortcut, QSplitter,
-    QTextEdit, QLabel, QProgressBar, QComboBox
+    QTextEdit, QLabel, QProgressBar, QComboBox, QFrame
 )
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineProfile, QWebEnginePage
-from PyQt5.QtGui import QColor, QPalette, QIcon, QKeySequence
+from PyQt5.QtGui import QColor, QPalette, QIcon, QKeySequence, QFont
 
 import requests
 import json
@@ -26,6 +26,11 @@ def chat_with_ollama(prompt, model="deepseek-r1:8b"):
             dec=json.loads(chunk.decode('utf-8'))
             yield dec["response"]
 
+class QHLine(QFrame):
+    def __init__(self):
+        super(QHLine, self).__init__()
+        self.setFrameShape(QFrame.HLine)
+        self.setFrameShadow(QFrame.Sunken)
 
 class AIWorker(QThread):
     chunk_received = pyqtSignal(str)
@@ -73,14 +78,134 @@ COLORS = {
     'bg_primary': '#1E1E1E',
     'bg_secondary': '#1E1E1E',
     'bg_tertiary': '#3A3A3F',
-    'accent': '#4A6BF5',
-    'accent_hover': '#5A7BFF',
+    'accent': '#198754',
+    'accent_hover': '#209055',
     'text_primary': '#FFFFFF',
     'text_secondary': '#B0B0B0',
     'danger': '#E53935',
     'success': '#43A047'
 }
+class TitleBar(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent = parent
+        self.layout = QHBoxLayout(self)
+        self.layout.setContentsMargins(10, 0, 10, 0)
+        self.layout.setSpacing(8)
+        self.button_container = QWidget()
+        self.button_container.setFixedWidth(70)
+        button_layout = QHBoxLayout(self.button_container)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(8)
+        self.close_button = QPushButton()
+        self.minimize_button = QPushButton()
+        self.maximize_button = QPushButton()
 
+        for button in [self.close_button, self.minimize_button, self.maximize_button]:
+            button.setFixedSize(12, 12)
+
+        button_layout.addWidget(self.close_button)
+        button_layout.addWidget(self.minimize_button)
+        button_layout.addWidget(self.maximize_button)
+        button_layout.addStretch()
+
+        self.title = QLabel("New Tab - Chronico")
+        self.title.setAlignment(Qt.AlignCenter)
+
+        self.close_button.clicked.connect(self.parent.close)
+        self.minimize_button.clicked.connect(self.parent.showMinimized)
+        self.maximize_button.clicked.connect(self.toggle_maximize)
+
+        self.layout.addWidget(self.button_container)
+        self.layout.addWidget(self.title)
+        self.layout.addSpacing(70)
+
+        self.setFixedHeight(38)
+        self.start = QPoint(0, 0)
+        self.pressing = False
+
+        self.setStyleSheet(f"""
+            TitleBar {{
+                background-color: {COLORS['bg_primary']};
+                border-bottom: 1px solid {COLORS['bg_tertiary']};
+            }}
+
+            QLabel {{
+                color: {COLORS['text_primary']};
+                font-size: 13px;
+                font-weight: 500;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                letter-spacing: -0.01em;
+
+            }}
+
+            QPushButton {{
+                border: none;
+                border-radius: 6px;
+            }}
+
+            QPushButton#close {{
+                background-color: #ff5f57;
+            }}
+            QPushButton#close:hover {{
+                background-color: #ff7369;
+            }}
+
+            QPushButton#minimize {{
+                background-color: #febc2e;
+            }}
+            QPushButton#minimize:hover {{
+                background-color: #fec84a;
+            }}
+
+            QPushButton#maximize {{
+                background-color: #28c940;
+            }}
+            QPushButton#maximize:hover {{
+                background-color: #3ed955;
+            }}
+
+            QPushButton:pressed {{
+                opacity: 0.8;
+            }}
+        """)
+
+        self.close_button.setObjectName("close")
+        self.minimize_button.setObjectName("minimize")
+        self.maximize_button.setObjectName("maximize")
+
+    def toggle_maximize(self):
+        if self.parent.isMaximized():
+            self.parent.showNormal()
+        else:
+            self.parent.showMaximized()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and not self.button_container.geometry().contains(event.pos()):
+            self.start = self.mapToGlobal(event.pos())
+            self.pressing = True
+
+    def mouseMoveEvent(self, event):
+        if self.pressing:
+            if self.parent.isMaximized():
+                self.parent.showNormal()
+                ratio = event.pos().x() / self.width()
+                new_x = int(self.parent.width() * ratio)
+                self.start = QPoint(new_x, event.pos().y())
+
+            end = self.mapToGlobal(event.pos())
+            movement = end - self.start
+
+            pos = self.parent.pos()
+            self.parent.move(pos.x() + movement.x(), pos.y() + movement.y())
+            self.start = end
+
+    def mouseReleaseEvent(self, event):
+        self.pressing = False
+
+    def mouseDoubleClickEvent(self, event):
+        if not self.button_container.geometry().contains(event.pos()):
+            self.toggle_maximize()
 class AISidePanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -197,6 +322,8 @@ class Browser(QMainWindow):
         self.new_tab_path = QUrl().fromLocalFile(os.path.abspath("templates/new_tab.html"))
         self.init_ui()
         self.current_worker = None
+        self.setWindowFlags(Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
 
     def init_ui(self):
         self.setWindowTitle("Chronico")
@@ -206,7 +333,13 @@ class Browser(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout(self.central_widget)
         self.layout.setSpacing(8)
-        self.layout.setContentsMargins(12, 12, 12, 12)
+        self.layout.setContentsMargins(8, 2, 8, 0)
+        self.title_bar = TitleBar(self)
+        self.layout.addWidget(self.title_bar)
+        self.browser_container = QWidget()
+        self.browser_layout = QVBoxLayout(self.browser_container)
+        self.browser_layout.setSpacing(8)
+        self.browser_layout.setContentsMargins(12, 12, 12, 6)
 
         self.nav_layout = QHBoxLayout()
         self.nav_layout.setSpacing(8)
@@ -267,11 +400,12 @@ class Browser(QMainWindow):
             }}
             QLineEdit {{
                 padding: 8px 16px;
-                border-radius: 18px;
+                border-radius: 8px;
                 border: none;
                 background-color: {COLORS['bg_tertiary']};
                 color: {COLORS['text_primary']};
                 font-size: 14px;
+                width : 100%;
             }}
             QPushButton {{
                 background: {COLORS['bg_tertiary']};
@@ -285,7 +419,7 @@ class Browser(QMainWindow):
                 background: {COLORS['bg_secondary']};
             }}
             QToolButton {{
-                background: {COLORS['bg_secondary']};
+                background: {COLORS['bg_tertiary']};
                 border: none;
                 border-radius: 8px;
                 color: {COLORS['text_primary']};
@@ -293,9 +427,17 @@ class Browser(QMainWindow):
                 padding: 4px 8px;
             }}
             QToolButton:hover {{
-                background: {COLORS['bg_tertiary']};
+                background: {COLORS['bg_secondary']};
             }}
+            QMainWindow {{
+                background-color: {COLORS['bg_primary']};
+                border: 1px solid {COLORS['bg_tertiary']};
+                border-radius: 8px;
+                padding:10px;
+            }}
+
         """)
+        self.layout.addWidget(self.browser_container)
 
         self.add_new_tab()
         self.search_bar.returnPressed.connect(self.navigate_to_url)
@@ -391,6 +533,7 @@ class Browser(QMainWindow):
             title = web_view.title()
             if title:
                 self.tabs.setTabText(index, title[:20] + "..." if len(title) > 20 else title)
+                self.title_bar.title.setText(title + " - Chronico" if len(title)<=20 else title[:20]+"..." + " - Chronico")
             self.search_bar.setText(web_view.url().toString())
 
     def tab_index_from_web_view(self, web_view):
@@ -403,6 +546,8 @@ class Browser(QMainWindow):
         if index >= 0:
             current_tab = self.tabs.widget(index)
             self.search_bar.setText(current_tab.web_view.url().toString())
+            title = current_tab.web_view.title()
+            self.title_bar.title.setText(title + " - Chronico" if len(title)<=20 else title[:20]+"..." + " - Chronico")
 
     def analyze_current_page(self):
         current_tab = self.tabs.currentWidget()
