@@ -7,10 +7,11 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineProfile, QWebEnginePage
 from PyQt5.QtGui import QColor, QPalette, QIcon, QKeySequence, QFont
-
+import markdown2
 import requests
 import json
 import sys
+import re
 
 def chat_with_ollama(prompt, model="deepseek-r1:8b"):
     url = "http://localhost:11434/api/generate"
@@ -32,25 +33,34 @@ class QHLine(QFrame):
         self.setFrameShape(QFrame.HLine)
         self.setFrameShadow(QFrame.Sunken)
 
+def format_response(text):
+    formatted = markdown2.markdown(text, extras=["fenced-code-blocks", "tables"])
+    formatted = re.sub(r"<think>(.*?)</think>", r'<span style="color:#808080;">\1</span>', formatted, flags=re.DOTALL)
+
+    return formatted
+
 class AIWorker(QThread):
     chunk_received = pyqtSignal(str)
     finished = pyqtSignal()
 
-    def __init__(self, text, model):
+    def __init__(self, text, model, ai_panel):
         super().__init__()
         self.text = text
         self.model = model
         self._is_running = True
+        self.ai_panel : AISidePanel = ai_panel
+        self.final_response = ""
 
     def run(self):
         try:
             for chunk in chat_with_ollama(self.text, self.model):
                 if not self._is_running:
                     break
-                self.chunk_received.emit(chunk)
+                self.final_response += chunk
+                formatted_response = format_response(self.final_response)
+                self.chunk_received.emit(formatted_response)
             self.finished.emit()
         except Exception as e:
-            self.chunk_received.emit("\n<finish>")
             self.finished.emit()
 
     def stop(self):
@@ -316,6 +326,12 @@ class AISidePanel(QWidget):
     def model(self):
         return self.model_selector.currentText()
 
+    def format_ai_response(response: str) -> str:
+        response = response.replace("<think>", '<span style="color:gray;"><i>') \
+                        .replace("</think>", "</i></span>") \
+                        .replace("</finish>", '<hr style="border: none; border-top: 1px solid gray;">')
+        return response
+
 class Browser(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -491,18 +507,19 @@ class Browser(QMainWindow):
         ai_panel.stop_button.show()
         ai_panel.response_area.clear()
 
-        self.current_worker = AIWorker(ai_panel.input_area.toPlainText(), model = ai_panel.model)
+        self.current_worker = AIWorker(ai_panel.input_area.toPlainText(), model = ai_panel.model, ai_panel=ai_panel)
         ai_panel.input_area.setText("")
 
         self.current_worker.chunk_received.connect(lambda chunk: self.handle_ai_chunk(chunk, ai_panel))
         self.current_worker.finished.connect(lambda: self.handle_ai_finished(ai_panel))
         self.current_worker.start()
 
-    def handle_ai_chunk(self, chunk, ai_panel):
-        cursor = ai_panel.response_area.textCursor()
-        cursor.movePosition(cursor.End)
-        cursor.insertText(chunk)
-        ai_panel.response_area.setTextCursor(cursor)
+    def handle_ai_chunk(self, chunk, ai_panel : AISidePanel):
+        if not hasattr(ai_panel, "thinking_mode"):
+            ai_panel.thinking_mode = False
+        ai_panel.response_area.setHtml(chunk)
+        ai_panel.response_area.verticalScrollBar().setValue(ai_panel.response_area.verticalScrollBar().maximum())
+
 
     def handle_ai_finished(self, ai_panel):
         ai_panel.progress.hide()
